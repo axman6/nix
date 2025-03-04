@@ -33,13 +33,33 @@ struct Settings : public Config
             as the Personal Access Token from the Github server (see
             https://docs.github.com/en/developers/apps/building-oauth-apps/authorizing-oauth-apps).
 
-          * Gitlab: the token value is either the OAuth2 token or the
-            Personal Access Token (these are different types tokens
-            for gitlab, see
-            https://docs.gitlab.com/12.10/ee/api/README.html#authentication).
+          * Gitlab: the token value is one of an OAuth2 token, a
+            Personal Access Token, or the CI_JOB_TOKEN (these are different
+            types tokens for gitlab, see
+            https://docs.gitlab.com/12.10/ee/api/README.html#authentication
+            and https://archives.docs.gitlab.com/16.11/ee/ci/jobs/ci_job_token.html).
             The `token` value should be `type:tokenstring` where
-            `type` is either `OAuth2` or `PAT` to indicate which type
-            of token is being specified.
+            `type` is one of `OAuth2`, `PAT` or `CI_JOB_TOKEN` to
+            indicate which type of token is being specified.
+
+            `CI_JOB_TOKEN`s are empemeral, they are only valid for a single
+            CI job and are passed to the build using the `$CI_JOB_TOKEN`
+            environment variable. GitLab CI jobs which may need to modify
+            their nix.conf prior to building:
+
+            ```
+            before_script:
+                - echo "access-tokens = gitlab.mycompany.com=CI_JOB_TOKEN:${CI_JOB_TOKEN}" >> ~/.config/nix/nix.conf
+            ```
+
+            This method mostly makes sense when builds occur within docker images, where changes to `nix.conf` in every build won't cause problems.
+
+            Alternatively, the `NIX_CONFIG` environment can be used:
+
+            ```
+            $ export NIX_CONFIG=${NIX_CONFIG}\naccess-tokens = gitlab.mycompany.com=CI_JOB_TOKEN:${CI_JOB_TOKEN}"
+            $ nix-build
+            ```
 
           Example `~/.config/nix/nix.conf`:
 
