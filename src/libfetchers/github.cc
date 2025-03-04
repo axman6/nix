@@ -452,13 +452,16 @@ struct GitLabInputScheme : GitArchiveInputScheme
 
     std::optional<std::pair<std::string, std::string>> accessHeaderFromToken(const std::string & token) const override
     {
-        // Gitlab supports 4 kinds of authorization, two of which are
-        // relevant here: OAuth2 and PAT (Private Access Token).  The
-        // user can indicate which token is used by specifying the
-        // token as <TYPE>:<VALUE>, where type is "OAuth2" or "PAT".
+        // Gitlab supports 5 kinds of authorization, three of which are
+        // relevant here: OAuth2, PAT (Private Access Token) and CI_JOB_TOKEN.
+        // The user can indicate which token is used by specifying the
+        // token as <TYPE>:<VALUE>, where type is "OAuth2", "PAT" or
+        // "CI_JOB_TOKEN".
         // If the <TYPE> is unrecognized, this will fall back to
         // treating this simply has <HDRNAME>:<HDRVAL>.  See
         // https://docs.gitlab.com/12.10/ee/api/README.html#authentication
+        // CI_JOB_TOKEN is used to change the URL's userinfo instead of headers
+        // - see accessUserinfoFromToken().
         auto fldsplit = token.find_first_of(':');
         // n.b. C++20 would allow: if (token.starts_with("OAuth2:")) ...
         if ("OAuth2" == token.substr(0, fldsplit))
@@ -468,6 +471,18 @@ struct GitLabInputScheme : GitArchiveInputScheme
         warn("Unrecognized GitLab token type %s",  token.substr(0, fldsplit));
         return std::make_pair(token.substr(0,fldsplit), token.substr(fldsplit+1));
     }
+
+        std::optional<std::string> accessUserinfoFromToken(const std::string & token) const
+        {
+        // In the case of CI_JOB_TOKEN, the URL's userinfo (username and
+        // password) must be filled in with "gitlab-ci-token:${CI_JOB_TOKEN}"
+        // See https://archives.docs.gitlab.com/16.11/ee/ci/jobs/ci_job_token.html
+        // "Use a job token to clone a private project's repository"
+        auto fldsplit = token.find_first_of(':');
+        if ("CI_JOB_TOKEN" == token.substr(0, fldsplit))
+            return token.substr(fldsplit+1);
+        return {};
+        }
 
     RefInfo getRevFromRef(nix::ref<Store> store, const Input & input) const override
     {
@@ -514,8 +529,19 @@ struct GitLabInputScheme : GitArchiveInputScheme
     {
         auto host = maybeGetStrAttr(input.attrs, "host").value_or("gitlab.com");
         // FIXME: get username somewhere
-        Input::fromURL(*input.settings, fmt("git+https://%s/%s/%s.git",
-                host, getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo")))
+        auto fullUrl = fmt("git+https://%s/%s/%s.git", host,
+                getStrAttr(input.attrs, "owner"), getStrAttr(input.attrs, "repo"));
+
+        auto accessToken = getAccessToken(*input.settings, host, fullUrl);
+        if(accessToken) {
+            // My kingdom for a .and_then - C++23 only
+            auto ciToken = accessUserinfoFromToken(*accessToken);
+            if(ciToken)
+                fullUrl = fmt("git+https://gitlab-ci-token:%s@%s/%s/%s.git",
+                    *ciToken, host, getStrAttr(input.attrs, "owner"),
+                    getStrAttr(input.attrs, "repo"));
+        }
+        Input::fromURL(*input.settings, fullUrl)
             .applyOverrides(input.getRef(), input.getRev())
             .clone(destDir);
     }
